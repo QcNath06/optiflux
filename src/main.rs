@@ -9,6 +9,15 @@ impl Terrain {
     fn height(&self, x: usize, z: usize) -> f32 {
         self.heights[z * self.width + x]
     }
+
+    fn print_grid(&self) {
+        for z in 0..self.depth {
+            for x in 0..self.width {
+                print!("{:5.1}", self.height(x, z));
+            }
+            println!();
+        }
+    }
 }
 
 fn main() {
@@ -41,10 +50,5 @@ fn main() {
     };
 
     // Print the terrain as a grid
-    for z in 0..terrain.depth {
-        for x in 0..terrain.width {
-            print!("{:5.1}", terrain.height(x, z));
-        }
-        println!();
-    }
+    terrain.print_grid();
 }
