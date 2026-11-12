@@ -2,61 +2,29 @@ mod terrain;
 use terrain::Terrain;
 
 fn main() {
-    let text = std::fs::read_to_string("../data/optifluxData/test_small.asc")
-        .expect("Could not read the ASC file");
+    // Load the real LiDAR terrain (MNT) exported from QGIS
+    let terrain = Terrain::from_asc("../data/optifluxData/test_small.asc");
 
-    let mut ncols: usize = 0;
-    let mut nrows: usize = 0;
-    let mut x_corner: f64 = 0.0;
-    let mut y_corner: f64 = 0.0;
-    let mut cell_size: f64 = 1.0;
-    let mut nodata: f64 = -9999.0;
-    let mut header_lines = 0;
+    // Small map: '#' = data, '.' = no data (one character every 40 m)
+    terrain.print_coverage_map(40);
 
-    for line in text.lines() {
-        let mut words = line.split_whitespace();
-        let key = words.next().unwrap();
+    println!("Height at (0, 0): {:.2} m", terrain.height(0, 0));
 
-        // Header lines start with a letter. Data lines start with a number.
-        if !key.chars().next().unwrap().is_alphabetic() {
-            break;
-        }
+    // Investigation: print the raw heights with 3 decimals
+    println!("Height at (1000,500): {:.3} m", terrain.height(1000, 500));
+    println!("Height at (1001,500): {:.3} m", terrain.height(1001, 500));
 
-        header_lines += 1;
-
-        let value: f64 = words.next().unwrap().parse().unwrap();
-
-        match key.to_lowercase().as_str() {
-            "ncols" => ncols = value as usize,
-            "nrows" => nrows = value as usize,
-            "xllcorner" => x_corner = value,
-            "yllcorner" => y_corner = value,
-            "cellsize" | "dx" => cell_size = value,
-            "nodata_value" => nodata = value,
-            _ => {} // any other keyword (like "dy"): ignore
-        }
+    // Slope over a longer distance (10 m)
+    match terrain.slope_between(1000, 500, 1010, 500) {
+        Some(slope) => println!("Slope over 10 m: {:.3}%", slope),
+        None => println!("Slope over 10 m: no data"),
     }
 
-    let mut heights: Vec<f32> = Vec::with_capacity(ncols * nrows);
-    let mut nodata_count = 0;
-
-    for line in text.lines().skip(header_lines) {
-        for word in line.split_whitespace() {
-            let h: f64 = word.parse().unwrap();
-            if h == nodata {
-                nodata_count += 1;
-            }
-            heights.push(h as f32);
+    // Try a few other spots
+    for (x, z) in [(600, 200), (900, 800), (1500, 300), (1700, 900)] {
+        match terrain.slope_between(x, z, x + 1, z) {
+            Some(slope) => println!("Slope at ({},{}): {:.3}%", x, z, slope),
+            None => println!("Slope at ({},{}): no data", x, z),
         }
     }
-
-    println!("Heights read: {}", heights.len());
-    println!("No-data cells: {}", nodata_count);
-
-    println!("Number of cells: {}", ncols * nrows);
-    println!("Grid: {} x {} cells", ncols, nrows);
-    println!("Bottom-left corner: ({}, {})", x_corner, y_corner);
-    println!("Cell size: {} m", cell_size);
-    println!("No data value: {}", nodata);
-    println!("File size: {} characters", text.len());
 }
