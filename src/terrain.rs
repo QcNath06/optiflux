@@ -34,7 +34,7 @@ impl Terrain {
         }
     }
 
-    pub fn height(&self, x: usize, z: usize) -> f32 {
+    fn height(&self, x: usize, z: usize) -> f32 {
         self.heights[z * self.width + x]
     }
 

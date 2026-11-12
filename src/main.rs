@@ -2,37 +2,61 @@ mod terrain;
 use terrain::Terrain;
 
 fn main() {
-    // Create a testing terrain with a hill in the center
-    let terrain = Terrain::new_testing_terrain(9, 9, 13.0);
-    // Print the terrain as a grid
-    terrain.print_grid();
+    let text = std::fs::read_to_string("../data/optifluxData/test_small.asc")
+        .expect("Could not read the ASC file");
 
-    // Straight neighbors (should give the same results as before)
-    match terrain.slope_between(0, 4, 1, 4) {
-        Some(slope) => println!("(0,4) → (1,4): {:.1}%", slope),
-        None => println!("(0,4) → (1,4): outside the terrain"),
+    let mut ncols: usize = 0;
+    let mut nrows: usize = 0;
+    let mut x_corner: f64 = 0.0;
+    let mut y_corner: f64 = 0.0;
+    let mut cell_size: f64 = 1.0;
+    let mut nodata: f64 = -9999.0;
+    let mut header_lines = 0;
+
+    for line in text.lines() {
+        let mut words = line.split_whitespace();
+        let key = words.next().unwrap();
+
+        // Header lines start with a letter. Data lines start with a number.
+        if !key.chars().next().unwrap().is_alphabetic() {
+            break;
+        }
+
+        header_lines += 1;
+
+        let value: f64 = words.next().unwrap().parse().unwrap();
+
+        match key.to_lowercase().as_str() {
+            "ncols" => ncols = value as usize,
+            "nrows" => nrows = value as usize,
+            "xllcorner" => x_corner = value,
+            "yllcorner" => y_corner = value,
+            "cellsize" | "dx" => cell_size = value,
+            "nodata_value" => nodata = value,
+            _ => {} // any other keyword (like "dy"): ignore
+        }
     }
 
-    // Diagonal
-    match terrain.slope_between(0, 0, 1, 1) {
-        Some(slope) => println!("(0,0) → (1,1): {:.1}%", slope),
-        None => println!("(0,0) → (1,1): outside the terrain"),
+    let mut heights: Vec<f32> = Vec::with_capacity(ncols * nrows);
+    let mut nodata_count = 0;
+
+    for line in text.lines().skip(header_lines) {
+        for word in line.split_whitespace() {
+            let h: f64 = word.parse().unwrap();
+            if h == nodata {
+                nodata_count += 1;
+            }
+            heights.push(h as f32);
+        }
     }
 
-    // Along the edge (not toward the top of the hill)
-    match terrain.slope_between(0, 0, 1, 0) {
-        Some(slope) => println!("(0,0) → (1,0): {:.1}%", slope),
-        None => println!("(0,0) → (1,0): outside the terrain"),
-    }
+    println!("Heights read: {}", heights.len());
+    println!("No-data cells: {}", nodata_count);
 
-    // Outside the terrain
-    match terrain.slope_between(8, 8, 9, 9) {
-        Some(slope) => println!("(8,8) → (9,9): {:.1}%", slope),
-        None => println!("(8,8) → (9,9): outside the terrain"),
-    }
-
-    //Export 3D model to OBJ file
-    terrain
-        .save_obj("terrain.obj")
-        .expect("Unable to save OBJ file");
+    println!("Number of cells: {}", ncols * nrows);
+    println!("Grid: {} x {} cells", ncols, nrows);
+    println!("Bottom-left corner: ({}, {})", x_corner, y_corner);
+    println!("Cell size: {} m", cell_size);
+    println!("No data value: {}", nodata);
+    println!("File size: {} characters", text.len());
 }
