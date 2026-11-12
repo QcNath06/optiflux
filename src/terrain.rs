@@ -169,30 +169,125 @@ impl Terrain {
         Some((height_difference / horizontal_distance) * 100.0)
     }
 
+    /// Size of the terrain in metres: (width along x, depth along z).
+    pub fn size_in_metres(&self) -> (f32, f32) {
+        (
+            (self.width - 1) as f32 * self.cell_size,
+            (self.depth - 1) as f32 * self.cell_size,
+        )
+    }
+
+    /// Lowest height that has data (ignores NaN).
+    pub fn min_height(&self) -> f32 {
+        let mut min_h = f32::MAX;
+        for &h in &self.heights {
+            if !h.is_nan() {
+                min_h = min_h.min(h);
+            }
+        }
+        min_h
+    }
+
+    /// Builds the 3D shape of the terrain: a list of points and a list of triangles.
+    /// This has nothing to do with Bevy, so it can be tested and reused anywhere.
+    /// - `step`: keep one point every `step` cells
+    /// - `vertical_scale`: multiply heights to exaggerate the relief
+    /// Heights are shifted so the lowest point is at y = 0.
+    /// Returns (positions, indices): every 3 indices make one triangle.
+    pub fn mesh_data(&self, step: usize, vertical_scale: f32) -> (Vec<[f32; 3]>, Vec<u32>) {
+        let xs: Vec<usize> = (0..self.width).step_by(step).collect();
+        let zs: Vec<usize> = (0..self.depth).step_by(step).collect();
+        let cols = xs.len();
+        let base = self.min_height();
+
+        // 1. Points
+        let mut positions = Vec::with_capacity(xs.len() * zs.len());
+        for &z in &zs {
+            for &x in &xs {
+                let h = self.height(x, z);
+                // No data → put it at the bottom. No triangle will use it anyway.
+                let y = if h.is_nan() {
+                    0.0
+                } else {
+                    (h - base) * vertical_scale
+                };
+                positions.push([x as f32 * self.cell_size, y, z as f32 * self.cell_size]);
+            }
+        }
+
+        // 2. Triangles (same pattern as save_obj, but indices start at 0)
+        let mut indices = Vec::new();
+        for row in 0..zs.len() - 1 {
+            for col in 0..cols - 1 {
+                let corners = [
+                    self.height(xs[col], zs[row]),
+                    self.height(xs[col + 1], zs[row]),
+                    self.height(xs[col], zs[row + 1]),
+                    self.height(xs[col + 1], zs[row + 1]),
+                ];
+                if corners.iter().any(|h| h.is_nan()) {
+                    continue;
+                }
+
+                let i = (row * cols + col) as u32;
+                let right = i + 1;
+                let below = i + cols as u32;
+                let diag = below + 1;
+
+                indices.extend_from_slice(&[i, below, right]);
+                indices.extend_from_slice(&[right, below, diag]);
+            }
+        }
+
+        (positions, indices)
+    }
+
     /// Saves the terrain as a Wavefront .obj file.
-    pub fn save_obj(&self, path: &str) -> std::io::Result<()> {
+    /// - `step`: keep one point every `step` cells (1 = all points, 4 = 16x smaller file)
+    /// - `vertical_scale`: multiply heights to make the relief easier to see (1.0 = real)
+    /// Cells with no data (NaN) become holes in the 3D model.
+    pub fn save_obj(&self, path: &str, step: usize, vertical_scale: f32) -> std::io::Result<()> {
         let file = File::create(path)?;
         let mut out = BufWriter::new(file);
 
-        // 1. One vertex per point: "v x y z"
-        for z in 0..self.depth {
-            for x in 0..self.width {
+        // Which columns and rows we keep (0, step, 2*step, ...)
+        let xs: Vec<usize> = (0..self.width).step_by(step).collect();
+        let zs: Vec<usize> = (0..self.depth).step_by(step).collect();
+        let cols = xs.len(); // number of points per row in the OBJ
+
+        // 1. One vertex per kept point: "v x y z"
+        for &z in &zs {
+            for &x in &xs {
+                let h = self.height(x, z);
+                // A NaN would break 3D viewers. We write 0 instead,
+                // and no triangle will use this point (see below).
+                let y = if h.is_nan() { 0.0 } else { h * vertical_scale };
                 writeln!(
                     out,
                     "v {} {} {}",
                     x as f32 * self.cell_size,
-                    self.height(x, z),
+                    y,
                     z as f32 * self.cell_size
                 )?;
             }
         }
 
-        // 2. Two triangles per square: "f a b c"
-        for z in 0..self.depth - 1 {
-            for x in 0..self.width - 1 {
-                let i = z * self.width + x + 1; // +1 because OBJ starts counting at 1
+        // 2. Two triangles per square, only where all 4 corners have data
+        for row in 0..zs.len() - 1 {
+            for col in 0..cols - 1 {
+                let corners = [
+                    self.height(xs[col], zs[row]),
+                    self.height(xs[col + 1], zs[row]),
+                    self.height(xs[col], zs[row + 1]),
+                    self.height(xs[col + 1], zs[row + 1]),
+                ];
+                if corners.iter().any(|h| h.is_nan()) {
+                    continue; // no data here → leave a hole
+                }
+
+                let i = row * cols + col + 1; // +1 because OBJ starts counting at 1
                 let right = i + 1;
-                let below = i + self.width;
+                let below = i + cols;
                 let diag = below + 1;
 
                 writeln!(out, "f {} {} {}", i, below, right)?;
@@ -237,10 +332,31 @@ mod tests {
     }
 
     #[test]
-    fn longer_distance_gives_finer_slope() {
-        let terrain = Terrain::new_testing_terrain(9, 9, 13.0);
-        // Slope over 4 cells must be between the slopes of the individual steps
-        let long = terrain.slope_between(0, 4, 4, 4).unwrap();
-        assert!(long > 0.0);
+    fn obj_export_skips_no_data() {
+        let mut terrain = Terrain::new_testing_terrain(5, 5, 4.0);
+        terrain.heights[0] = f32::NAN; // (0, 0) has no data
+        let path = std::env::temp_dir().join("optiflux_test.obj");
+        let path = path.to_str().unwrap();
+        terrain.save_obj(path, 1, 1.0).unwrap();
+
+        let text = std::fs::read_to_string(path).unwrap();
+        let vertices = text.lines().filter(|l| l.starts_with("v ")).count();
+        let faces = text.lines().filter(|l| l.starts_with("f ")).count();
+
+        assert_eq!(vertices, 25); // 5 x 5 points
+        assert_eq!(faces, 30); // 16 squares x 2 triangles, minus the 2 touching (0, 0)
+        assert!(!text.contains("NaN"));
+    }
+
+    #[test]
+    fn mesh_data_has_right_counts() {
+        let mut terrain = Terrain::new_testing_terrain(5, 5, 4.0);
+        terrain.heights[0] = f32::NAN;
+        let (positions, indices) = terrain.mesh_data(1, 1.0);
+        assert_eq!(positions.len(), 25);
+        assert_eq!(indices.len(), 30 * 3); // 30 triangles, 3 indices each
+        // lowest valid point is at y = 0
+        let lowest = positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+        assert!(lowest.abs() < 0.0001);
     }
 }

@@ -4,3 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bevy = "0.20"
+bevy_panorbit_camera = "0.36"
+
+# Bevy is slow in debug mode. These settings make your own code compile fast,
+# while the libraries (Bevy etc.) are optimized. Recommended by Bevy.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
